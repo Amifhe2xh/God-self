@@ -1,0 +1,6 @@
+.env
+data/
+CipherElite/
+__pycache__/
+*.pyc
+*.session
