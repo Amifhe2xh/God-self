@@ -1,6 +1,5 @@
 import os
 import sys
-import signal
 import asyncio
 import logging
 
@@ -32,9 +31,7 @@ class CipherManager:
                 f.write(f"API_HASH={api_hash}\n")
                 f.write(f"ELITE_SESSION={session_string}\n")
                 f.write(f"PREFIX={prefix}\n")
-            logger.info(
-                f".env written: session_length={len(session_string)}"
-            )
+            logger.info(f".env written, session={len(session_string)} chars")
         except Exception as e:
             logger.error(f"Failed to write .env: {e}")
             return False
@@ -53,14 +50,11 @@ class CipherManager:
         try:
             main_py = os.path.join(CIPHER_DIR, "main.py")
             if not os.path.isfile(main_py):
-                logger.error("CipherElite main.py not found!")
+                logger.error("main.py not found!")
                 return False
 
-            cmd = [sys.executable, main_py]
-            logger.info(f"Starting CipherElite for {user_id}")
-
             proc = await asyncio.create_subprocess_exec(
-                *cmd,
+                sys.executable, main_py,
                 cwd=CIPHER_DIR,
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
@@ -70,8 +64,7 @@ class CipherManager:
             self.processes[user_id] = proc
             self.db.set_pid(user_id, proc.pid)
             self.monitors[user_id] = True
-
-            logger.info(f"CipherElite PID {proc.pid} for user {user_id}")
+            logger.info(f"CipherElite PID {proc.pid} for {user_id}")
 
             asyncio.create_task(
                 self._monitor(user_id, api_id, api_hash,
@@ -81,12 +74,10 @@ class CipherManager:
             await asyncio.sleep(5)
 
             if proc.returncode is not None:
-                stderr_out = await proc.stderr.read()
-                stdout_out = await proc.stdout.read()
+                out = (await proc.stdout.read()).decode(errors="replace")
+                err = (await proc.stderr.read()).decode(errors="replace")
                 logger.error(
-                    f"CipherElite crashed for {user_id}:\n"
-                    f"OUT: {stdout_out.decode(errors='replace')[-300:]}\n"
-                    f"ERR: {stderr_out.decode(errors='replace')[-300:]}"
+                    f"Crashed for {user_id}:\nOUT:{out[-400:]}\nERR:{err[-400:]}"
                 )
                 return False
 
@@ -94,7 +85,7 @@ class CipherManager:
             return True
 
         except Exception as e:
-            logger.error(f"start_instance error for {user_id}: {e}")
+            logger.error(f"Error for {user_id}: {e}")
             return False
 
     async def stop_instance(self, user_id: int):
@@ -108,7 +99,7 @@ class CipherManager:
                     proc.kill()
             except ProcessLookupError:
                 pass
-            logger.info(f"Stopped CipherElite for {user_id}")
+            logger.info(f"Stopped for {user_id}")
         self.db.set_pid(user_id, 0)
 
     async def _monitor(self, user_id, api_id, api_hash,
@@ -120,7 +111,6 @@ class CipherManager:
             proc = self.processes.get(user_id)
             if not proc:
                 break
-
             if proc.returncode is not None:
                 retries += 1
                 if retries > max_retries:
@@ -128,10 +118,7 @@ class CipherManager:
                     self.monitors.pop(user_id, None)
                     self.db.deactivate_user(user_id)
                     break
-
-                logger.warning(
-                    f"Restarting for {user_id} ({retries}/{max_retries})"
-                )
+                logger.warning(f"Restart {retries}/{max_retries} for {user_id}")
                 await asyncio.sleep(5)
                 if self.monitors.get(user_id, False):
                     await self.start_instance(
@@ -140,18 +127,16 @@ class CipherManager:
                     break
             else:
                 retries = 0
-
             await asyncio.sleep(15)
 
     async def restore_all(self) -> int:
         users = self.db.get_all_active()
         ok = 0
         for u in users:
-            success = await self.start_instance(
+            if await self.start_instance(
                 u["user_id"], u["api_id"], u["api_hash"],
                 u["session_string"], u.get("prefix", "."),
-            )
-            if success:
+            ):
                 ok += 1
             else:
                 self.db.deactivate_user(u["user_id"])
@@ -161,7 +146,6 @@ class CipherManager:
         self.monitors.clear()
         for uid in list(self.processes):
             await self.stop_instance(uid)
-        logger.info("All stopped.")
 
     def is_running(self, user_id: int) -> bool:
         proc = self.processes.get(user_id)
