@@ -31,22 +31,24 @@ from telethon.errors import (
 from database import Database
 from cipher_manager import CipherManager
 
-filterwarnings("ignore", message=r".*CallbackQueryHandler.*", category=PTBUserWarning)
+filterwarnings(
+    "ignore",
+    message=r".*CallbackQueryHandler.*",
+    category=PTBUserWarning,
+)
 
 logger = logging.getLogger(__name__)
 
 API_ID, API_HASH, PHONE, CODE, TWO_FA, PREFIX_STEP = range(6)
 
+SESSION_DIR = os.path.join(os.getcwd(), "data", "sessions")
 
-def fix_base64_padding(s: str) -> str:
+
+def fix_base64(s: str) -> str:
     s = s.strip().replace("\n", "").replace("\r", "").replace(" ", "")
     missing = len(s) % 4
     if missing:
         s += "=" * (4 - missing)
-    try:
-        base64.urlsafe_b64decode(s)
-    except Exception:
-        pass
     return s
 
 
@@ -73,7 +75,9 @@ class BotHandlers:
         name = update.effective_user.first_name or "کاربر"
 
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🚀 نصب CipherElite", callback_data="setup")],
+            [InlineKeyboardButton(
+                "🚀 نصب CipherElite", callback_data="setup"
+            )],
             [
                 InlineKeyboardButton("📊 وضعیت", callback_data="status"),
                 InlineKeyboardButton("⏹ توقف", callback_data="stop"),
@@ -104,9 +108,7 @@ class BotHandlers:
     async def btn_status(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
         await q.answer()
-        logger.info(f"[btn_status] user={q.from_user.id}")
         user = self.db.get_user(q.from_user.id)
-
         if user and user["is_active"]:
             r = self.manager.is_running(q.from_user.id)
             icon = "🟢 فعال" if r else "🟡 متوقف"
@@ -119,45 +121,34 @@ class BotHandlers:
             )
         else:
             text = "❌ نصب نشده."
-
         await q.message.reply_text(text, parse_mode="HTML")
 
     async def btn_stop(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
         await q.answer()
-        uid = q.from_user.id
-        logger.info(f"[btn_stop] user={uid}")
-        await self.manager.stop_instance(uid)
-        self.db.deactivate_user(uid)
+        await self.manager.stop_instance(q.from_user.id)
+        self.db.deactivate_user(q.from_user.id)
         await q.message.reply_text("⏹ متوقف شد.")
 
     async def btn_restart(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
         await q.answer()
-        uid = q.from_user.id
-        logger.info(f"[btn_restart] user={uid}")
-        user = self.db.get_user(uid)
-
+        user = self.db.get_user(q.from_user.id)
         if not user:
             return await q.message.reply_text("❌ ابتدا نصب کنید.")
-
         msg = await q.message.reply_text("🔄 ری‌استارت...")
-
         ok = await self.manager.start_instance(
-            uid, user["api_id"], user["api_hash"],
+            q.from_user.id, user["api_id"], user["api_hash"],
             user["session_string"], user.get("prefix", "."),
         )
-
         await msg.edit_text("✅ شد!" if ok else "❌ خطا")
 
     async def btn_delete(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
         await q.answer()
         uid = q.from_user.id
-        logger.info(f"[btn_delete] user={uid}")
         await self.manager.stop_instance(uid)
         self.db.deactivate_user(uid)
-
         kb = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("✅ بله", callback_data="confirm_delete"),
@@ -166,16 +157,17 @@ class BotHandlers:
         ])
         await q.message.reply_text("⚠️ حذف شود؟", reply_markup=kb)
 
-    async def btn_confirm_delete(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    async def btn_confirm_delete(self, update, ctx):
         q = update.callback_query
         await q.answer()
-        uid = q.from_user.id
-        logger.info(f"[btn_confirm_delete] user={uid}")
         with self.db._conn() as conn:
-            conn.execute("DELETE FROM users WHERE user_id=?", (uid,))
+            conn.execute(
+                "DELETE FROM users WHERE user_id=?",
+                (q.from_user.id,),
+            )
         await q.message.reply_text("🗑 حذف شد. /start")
 
-    async def btn_cancel_delete(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    async def btn_cancel_delete(self, update, ctx):
         q = update.callback_query
         await q.answer()
         await q.message.reply_text("✅ لغو شد.")
@@ -199,7 +191,7 @@ class BotHandlers:
     async def setup_entry(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
         uid = q.from_user.id
-        logger.info(f"[SETUP] button clicked by user={uid}")
+        logger.info(f"[SETUP] clicked by {uid}")
 
         await q.answer("⏳")
 
@@ -209,31 +201,27 @@ class BotHandlers:
 
         self.temp.pop(uid, None)
 
-        text = (
+        await q.message.reply_text(
             "🔷 <b>مرحله ۱ از ۶ — API_ID</b>\n\n"
             "از my.telegram.org بگیرید.\n\n"
-            "/cancel = لغو"
+            "/cancel = لغو",
+            parse_mode="HTML",
         )
-
-        await q.message.reply_text(text, parse_mode="HTML")
-        logger.info(f"[SETUP] user={uid} -> waiting for API_ID")
         return API_ID
 
     # ── conversation steps ───────────────────────────────────
 
     async def rx_api_id(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         uid = update.effective_user.id
-        text = update.message.text.strip()
-        logger.info(f"[API_ID] user={uid} text={text}")
+        logger.info(f"[API_ID] user={uid}")
 
         try:
-            api_id = int(text)
+            api_id = int(update.message.text.strip())
         except ValueError:
             await update.message.reply_text("❌ عدد صحیح وارد کنید.")
             return API_ID
 
         self.temp[uid] = {"api_id": api_id}
-
         await update.message.reply_text(
             "🔷 <b>مرحله ۲ از ۶ — API_HASH</b>\n\nبفرستید:",
             parse_mode="HTML",
@@ -250,7 +238,6 @@ class BotHandlers:
             return API_HASH
 
         self.temp[uid]["api_hash"] = h
-
         await update.message.reply_text(
             "🔷 <b>مرحله ۳ از ۶ — شماره تلفن</b>\n\n"
             "مثال: <code>+989123456789</code>",
@@ -267,8 +254,12 @@ class BotHandlers:
         msg = await update.message.reply_text("⏳ اتصال...")
 
         try:
+            # Use FILE session for stability
+            os.makedirs(SESSION_DIR, exist_ok=True)
+            session_path = os.path.join(SESSION_DIR, str(uid))
+
             client = TelegramClient(
-                StringSession(), data["api_id"], data["api_hash"],
+                session_path, data["api_id"], data["api_hash"],
                 connection_retries=5, retry_delay=1,
             )
             await client.connect()
@@ -276,6 +267,7 @@ class BotHandlers:
 
             data["phone"] = phone
             data["client"] = client
+            data["session_path"] = session_path
 
             await msg.edit_text(
                 "📱 <b>کد ارسال شد!</b>\n\n"
@@ -314,7 +306,8 @@ class BotHandlers:
 
             await msg.edit_text(
                 "🔷 <b>مرحله ۵ از ۶ — پیشوند</b>\n\n"
-                "یکی بفرست: <code>.</code> یا <code>!</code> یا <code>#</code>",
+                "یکی بفرست: <code>.</code> یا <code>!</code> "
+                "یا <code>#</code>",
                 parse_mode="HTML",
             )
             return PREFIX_STEP
@@ -370,11 +363,13 @@ class BotHandlers:
         )
 
         try:
+            # Generate session string
+            # Since we delayed Telethon import in main.py,
+            # our Telethon version matches CipherElite's version.
             session_str = StringSession.save(data["client"].session)
+            session_str = fix_base64(session_str)
             await data["client"].disconnect()
 
-            # Fix base64 padding
-            session_str = fix_base64_padding(session_str)
             logger.info(
                 f"[SESSION] user={uid} length={len(session_str)}"
             )
@@ -385,6 +380,7 @@ class BotHandlers:
                 data["phone"], session_str, prefix,
             )
 
+            # Start CipherElite
             logger.info(f"[INSTALL] Starting CipherElite for {uid}")
             ok = await self.manager.start_instance(
                 uid, data["api_id"], data["api_hash"],
@@ -403,7 +399,9 @@ class BotHandlers:
                     parse_mode="HTML",
                 )
             else:
-                await msg.edit_text("❌ خطا در نصب. دوباره /start")
+                await msg.edit_text(
+                    "❌ خطا در نصب. دوباره /start"
+                )
             return ConversationHandler.END
 
         except Exception as e:
@@ -427,29 +425,48 @@ class BotHandlers:
     # ── Register ─────────────────────────────────────────────
 
     def setup(self, app: Application):
-
         conv = ConversationHandler(
             entry_points=[
-                CallbackQueryHandler(self.setup_entry, pattern="^setup$")
+                CallbackQueryHandler(
+                    self.setup_entry, pattern="^setup$"
+                )
             ],
             states={
                 API_ID: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.rx_api_id)
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        self.rx_api_id,
+                    )
                 ],
                 API_HASH: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.rx_api_hash)
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        self.rx_api_hash,
+                    )
                 ],
                 PHONE: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.rx_phone)
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        self.rx_phone,
+                    )
                 ],
                 CODE: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.rx_code)
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        self.rx_code,
+                    )
                 ],
                 TWO_FA: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.rx_2fa)
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        self.rx_2fa,
+                    )
                 ],
                 PREFIX_STEP: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.rx_prefix)
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        self.rx_prefix,
+                    )
                 ],
             },
             fallbacks=[
@@ -462,12 +479,26 @@ class BotHandlers:
 
         app.add_handler(CommandHandler("start", self.cmd_start))
         app.add_handler(conv)
-        app.add_handler(CallbackQueryHandler(self.btn_status, pattern="^status$"))
-        app.add_handler(CallbackQueryHandler(self.btn_stop, pattern="^stop$"))
-        app.add_handler(CallbackQueryHandler(self.btn_restart, pattern="^restart$"))
-        app.add_handler(CallbackQueryHandler(self.btn_delete, pattern="^delete$"))
-        app.add_handler(CallbackQueryHandler(self.btn_confirm_delete, pattern="^confirm_delete$"))
-        app.add_handler(CallbackQueryHandler(self.btn_cancel_delete, pattern="^cancel_delete$"))
-        app.add_handler(CallbackQueryHandler(self.btn_help, pattern="^help$"))
+        app.add_handler(CallbackQueryHandler(
+            self.btn_status, pattern="^status$"
+        ))
+        app.add_handler(CallbackQueryHandler(
+            self.btn_stop, pattern="^stop$"
+        ))
+        app.add_handler(CallbackQueryHandler(
+            self.btn_restart, pattern="^restart$"
+        ))
+        app.add_handler(CallbackQueryHandler(
+            self.btn_delete, pattern="^delete$"
+        ))
+        app.add_handler(CallbackQueryHandler(
+            self.btn_confirm_delete, pattern="^confirm_delete$"
+        ))
+        app.add_handler(CallbackQueryHandler(
+            self.btn_cancel_delete, pattern="^cancel_delete$"
+        ))
+        app.add_handler(CallbackQueryHandler(
+            self.btn_help, pattern="^help$"
+        ))
 
         logger.info("All handlers registered.")
