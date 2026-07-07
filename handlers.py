@@ -57,6 +57,8 @@ class BotHandlers:
         else:
             status = "🔴 غیرفعال"
 
+        name = update.effective_user.first_name
+
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🚀 نصب CipherElite", callback_data="setup")],
             [
@@ -70,16 +72,18 @@ class BotHandlers:
             [InlineKeyboardButton("📚 راهنما", callback_data="help")],
         ])
 
-        await update.message.reply_text(
-            f"**🔷 CipherElite Deployer**\n\n"
-            f"سلام **{update.effective_user.first_name}**!\n\n"
-            f"**وضعیت:** {status}\n\n"
+        text = (
+            f"🔷 <b>CipherElite Deployer</b>\n\n"
+            f"سلام <b>{name}</b>!\n\n"
+            f"📊 وضعیت: {status}\n\n"
             f"• هوش مصنوعی داخلی\n"
             f"• ۶۰+ پلاگین\n"
             f"• ری‌استارت خودکار\n\n"
-            f"⚠️ مسئولیت استفاده بر عهده شماست.",
-            reply_markup=kb,
-            parse_mode="Markdown",
+            f"⚠️ مسئولیت استفاده بر عهده شماست."
+        )
+
+        await update.message.reply_text(
+            text, reply_markup=kb, parse_mode="HTML"
         )
 
     # ── standalone buttons ───────────────────────────────────
@@ -90,16 +94,17 @@ class BotHandlers:
         user = self.db.get_user(q.from_user.id)
         if user and user["is_active"]:
             r = self.manager.is_running(q.from_user.id)
-            txt = (
-                f"**📊 وضعیت**\n\n"
-                f"شماره: `+{user['phone']}`\n"
-                f"API: `{user['api_id']}`\n"
-                f"پیشوند: `{user['prefix']}`\n"
-                f"وضعیت: {'🟢 فعال' if r else '🟡 متوقف'}"
+            icon = "🟢 فعال" if r else "🟡 متوقف"
+            text = (
+                f"📊 <b>وضعیت</b>\n\n"
+                f"شماره: <code>+{user['phone']}</code>\n"
+                f"API: <code>{user['api_id']}</code>\n"
+                f"پیشوند: <code>{user['prefix']}</code>\n"
+                f"وضعیت: {icon}"
             )
         else:
-            txt = "❌ نصب نشده."
-        await q.message.reply_text(txt, parse_mode="Markdown")
+            text = "❌ نصب نشده."
+        await q.message.reply_text(text, parse_mode="HTML")
 
     async def btn_stop(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
@@ -150,15 +155,15 @@ class BotHandlers:
     async def btn_help(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
         await q.answer()
-        await q.message.reply_text(
-            "**📚 راهنما**\n\n"
+        text = (
+            "📚 <b>راهنما</b>\n\n"
             "1. از my.telegram.org API بگیرید\n"
             "2. نصب CipherElite بزنید\n"
             "3. اطلاعات را وارد کنید\n"
             "4. تمام!\n\n"
-            "دستورات: `.help` `.ping` `.alive`",
-            parse_mode="Markdown",
+            "دستورات: <code>.help</code> <code>.ping</code> <code>.alive</code>"
         )
+        await q.message.reply_text(text, parse_mode="HTML")
 
     # ── setup entry ──────────────────────────────────────────
 
@@ -175,12 +180,13 @@ class BotHandlers:
 
         self.temp.pop(uid, None)
 
-        await q.message.reply_text(
-            "**🔷 مرحله ۱/۶ — API_ID**\n\n"
+        text = (
+            "🔷 <b>مرحله ۱ از ۶ — API_ID</b>\n\n"
             "از my.telegram.org بگیرید.\n\n"
-            "/cancel = لغو",
-            parse_mode="Markdown",
+            "/cancel = لغو"
         )
+
+        await q.message.reply_text(text, parse_mode="HTML")
         logger.info(f"[SETUP] user={uid} -> waiting for API_ID")
         return API_ID
 
@@ -196,8 +202,8 @@ class BotHandlers:
             return API_ID
         self.temp[uid] = {"api_id": api_id}
         await update.message.reply_text(
-            "**🔷 مرحله ۲/۶ — API_HASH**\n\nبفرستید:",
-            parse_mode="Markdown",
+            "🔷 <b>مرحله ۲ از ۶ — API_HASH</b>\n\nبفرستید:",
+            parse_mode="HTML",
         )
         return API_HASH
 
@@ -210,9 +216,9 @@ class BotHandlers:
             return API_HASH
         self.temp[uid]["api_hash"] = h
         await update.message.reply_text(
-            "**🔷 مرحله ۳/۶ — شماره تلفن**\n\n"
-            "مثال: `+989123456789`",
-            parse_mode="Markdown",
+            "🔷 <b>مرحله ۳ از ۶ — شماره تلفن</b>\n\n"
+            "مثال: <code>+989123456789</code>",
+            parse_mode="HTML",
         )
         return PHONE
 
@@ -235,9 +241,9 @@ class BotHandlers:
             data["client"] = client
 
             await msg.edit_text(
-                "**📱 کد ارسال شد!\n\n"
-                "🔷 مرحله ۴/۶ — کد تایید**\n\nبفرستید:",
-                parse_mode="Markdown",
+                "📱 <b>کد ارسال شد!</b>\n\n"
+                "🔷 <b>مرحله ۴ از ۶ — کد تایید</b>\n\nبفرستید:",
+                parse_mode="HTML",
             )
             return CODE
 
@@ -254,7 +260,7 @@ class BotHandlers:
             return ConversationHandler.END
         except Exception as e:
             logger.error(f"[PHONE] error: {e}")
-            await msg.edit_text(f"❌ خطا: `{e}`")
+            await msg.edit_text(f"❌ خطا: {e}")
             self.temp.pop(uid, None)
             return ConversationHandler.END
 
@@ -269,14 +275,17 @@ class BotHandlers:
         try:
             await data["client"].sign_in(data["phone"], code)
             await msg.edit_text(
-                "**🔷 مرحله ۵/۶ — پیشوند**\n\n"
-                "یکی بفرست: `.` یا `!` یا `#`",
-                parse_mode="Markdown",
+                "🔷 <b>مرحله ۵ از ۶ — پیشوند</b>\n\n"
+                "یکی بفرست: <code>.</code> یا <code>!</code> یا <code>#</code>",
+                parse_mode="HTML",
             )
             return PREFIX_STEP
 
         except SessionPasswordNeededError:
-            await msg.edit_text("**🔐 رمز دو مرحله‌ای:** بفرستید:")
+            await msg.edit_text(
+                "🔐 <b>رمز دو مرحله‌ای:</b>\n\nبفرستید:",
+                parse_mode="HTML",
+            )
             return TWO_FA
         except PhoneCodeInvalidError:
             await msg.edit_text("❌ کد نامعتبر. دوباره:")
@@ -287,7 +296,7 @@ class BotHandlers:
             return ConversationHandler.END
         except Exception as e:
             logger.error(f"[CODE] error: {e}")
-            await msg.edit_text(f"❌ خطا: `{e}`")
+            await msg.edit_text(f"❌ خطا: {e}")
             self.temp.pop(uid, None)
             return ConversationHandler.END
 
@@ -300,13 +309,13 @@ class BotHandlers:
         try:
             await data["client"].sign_in(password=pw)
             await msg.edit_text(
-                "**🔷 مرحله ۵/۶ — پیشوند**\n\n"
-                "یکی: `.` یا `!` یا `#`",
-                parse_mode="Markdown",
+                "🔷 <b>مرحله ۵ از ۶ — پیشوند</b>\n\n"
+                "یکی: <code>.</code> یا <code>!</code> یا <code>#</code>",
+                parse_mode="HTML",
             )
             return PREFIX_STEP
         except Exception as e:
-            await msg.edit_text(f"❌ رمز نامعتبر: `{e}`")
+            await msg.edit_text(f"❌ رمز نامعتبر: {e}")
             return TWO_FA
 
     async def rx_prefix(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -318,7 +327,6 @@ class BotHandlers:
 
         msg = await update.message.reply_text(
             "⏳ نصب CipherElite...\n\nلطفاً صبر کنید...",
-            parse_mode="Markdown",
         )
 
         try:
@@ -340,23 +348,20 @@ class BotHandlers:
 
             if ok:
                 await msg.edit_text(
-                    f"**✅ CipherElite نصب شد!**\n\n"
-                    f"پیشوند: `{prefix}`\n"
-                    f"دستورات: `{prefix}help` `{prefix}ping`\n\n"
+                    f"✅ <b>CipherElite نصب شد!</b>\n\n"
+                    f"پیشوند: <code>{prefix}</code>\n"
+                    f"دستورات: <code>{prefix}help</code> <code>{prefix}ping</code>\n\n"
                     f"⚠️ مسئولیت با شماست.",
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
                 )
             else:
-                await msg.edit_text(
-                    "**❌ خطا در نصب. دوباره /start**",
-                    parse_mode="Markdown",
-                )
+                await msg.edit_text("❌ خطا در نصب. دوباره /start")
             return ConversationHandler.END
 
         except Exception as e:
             logger.error(f"[PREFIX] error: {e}")
             self.temp.pop(uid, None)
-            await msg.edit_text(f"❌ خطا: `{e}`")
+            await msg.edit_text(f"❌ خطا: {e}")
             return ConversationHandler.END
 
     async def cancel(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -393,7 +398,6 @@ class BotHandlers:
             per_message=False,
         )
 
-        # ORDER MATTERS
         app.add_handler(CommandHandler("start", self.cmd_start))
         app.add_handler(conv)
         app.add_handler(CallbackQueryHandler(self.btn_status, pattern="^status$"))
