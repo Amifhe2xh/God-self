@@ -1,6 +1,11 @@
 import logging
 import sys
-import asyncio
+import warnings
+
+# Suppress noisy warnings
+warnings.filterwarnings("ignore", message=r".*CallbackQueryHandler.*")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 from telegram.ext import Application
 from config import BOT_TOKEN
@@ -22,18 +27,17 @@ manager = CipherManager(db)
 async def on_startup(app):
     logger.info("=== CipherElite Deployer Bot Starting ===")
 
-    # Clone CipherElite if not present
     logger.info("Checking CipherElite installation...")
     ready = await manager.ensure_cipherelite()
+
     if not ready:
         logger.error("FATAL: Could not install CipherElite!")
         sys.exit(1)
 
-    # Restore active sessions
     logger.info("Restoring user sessions...")
     n = await manager.restore_all()
-    logger.info(f"Restored {n} CipherElite instance(s)")
-    logger.info("=== Bot Ready ===")
+    logger.info(f"Restored {n} instance(s)")
+    logger.info("=== Bot Ready! ===")
 
 
 async def on_shutdown(app):
