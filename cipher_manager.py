@@ -1,5 +1,6 @@
 import os
 import sys
+import base64
 import asyncio
 import logging
 
@@ -8,6 +9,24 @@ logger = logging.getLogger(__name__)
 CIPHER_REPO = "https://github.com/rishabhops/CipherElite.git"
 CIPHER_DIR = os.path.join(os.getcwd(), "CipherElite")
 USERS_DIR = os.path.join(os.getcwd(), "data", "cipher_users")
+
+
+def fix_session_padding(session_str: str) -> str:
+    """Fix base64 padding for session string."""
+    session_str = session_str.strip()
+    # Remove any whitespace or newlines
+    session_str = session_str.replace("\n", "").replace("\r", "").replace(" ", "")
+    # Fix padding
+    missing = len(session_str) % 4
+    if missing:
+        session_str += "=" * (4 - missing)
+    # Verify it's valid base64
+    try:
+        base64.urlsafe_b64decode(session_str)
+        logger.info(f"Session string valid, length={len(session_str)}")
+    except Exception as e:
+        logger.warning(f"Session string decode issue: {e}")
+    return session_str
 
 
 class CipherManager:
@@ -19,7 +38,9 @@ class CipherManager:
 
     @staticmethod
     async def ensure_cipherelite():
-        if os.path.isdir(os.path.join(CIPHER_DIR, "heroku")):
+        # Check multiple possible entry points
+        main_py = os.path.join(CIPHER_DIR, "main.py")
+        if os.path.isfile(main_py):
             logger.info("CipherElite already present.")
             return True
 
@@ -40,16 +61,23 @@ class CipherManager:
         if os.path.isfile(req_file):
             proc2 = await asyncio.create_subprocess_exec(
                 sys.executable, "-m", "pip", "install",
-                "--quiet", "-r", req_file,
+                "-r", req_file,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
             )
-            stdout2, stderr2 = await proc2.communicate()
+            stdout2, _ = await proc2.communicate()
             if proc2.returncode != 0:
-                logger.warning(f"Some deps failed: {stderr2.decode()[:300]}")
+                logger.warning(f"Some deps may have failed")
 
-        logger.info("CipherElite ready!")
-        return True
+        if os.path.isfile(main_py):
+            logger.info("CipherElite ready!")
+            return True
+        else:
+            logger.error("main.py not found after clone!")
+            # List what's in the directory
+            for f in os.listdir(CIPHER_DIR):
+                logger.info(f"  Found: {f}")
+            return False
 
     async def start_instance(self, user_id: int, api_id: int,
                              api_hash: str, session_string: str,
@@ -59,15 +87,37 @@ class CipherManager:
         user_dir = os.path.join(USERS_DIR, str(user_id))
         os.makedirs(user_dir, exist_ok=True)
 
-        env_path = os.path.join(CIPHER_DIR, ".env")
-        with open(env_path, "w") as f:
-            f.write(
-                f"API_ID={api_id}\n"
-                f"API_HASH={api_hash}\n"
-                f"ELITE_SESSION={session_string}\n"
-                f"PREFIX={prefix}\n"
-            )
+        # Fix session padding
+        session_string = fix_session_padding(session_string)
 
+        logger.info(f"Session for {user_id}: length={len(session_string)}")
+
+        # Write .env file carefully
+        env_path = os.path.join(CIPHER_DIR, ".env")
+        try:
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write(f"API_ID={api_id}\n")
+                f.write(f"API_HASH={api_hash}\n")
+                f.write(f"ELITE_SESSION={session_string}\n")
+                f.write(f"PREFIX={prefix}\n")
+            logger.info(f".env written with session length {len(session_string)}")
+
+            # Verify what was written
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if "ELITE_SESSION" in line:
+                        parts = line.strip().split("=", 1)
+                        if len(parts) == 2:
+                            read_session = parts[1]
+                            logger.info(
+                                f".env verified: ELITE_SESSION "
+                                f"length={len(read_session)}"
+                            )
+        except Exception as e:
+            logger.error(f"Failed to write .env: {e}")
+            return False
+
+        # Also set as environment variable
         env = os.environ.copy()
         env.update({
             "API_ID": str(api_id),
@@ -81,11 +131,11 @@ class CipherManager:
 
         try:
             main_py = os.path.join(CIPHER_DIR, "main.py")
-            if os.path.isfile(main_py):
-                cmd = [sys.executable, main_py]
-            else:
-                cmd = [sys.executable, "-m", "heroku"]
+            if not os.path.isfile(main_py):
+                logger.error("main.py not found!")
+                return False
 
+            cmd = [sys.executable, main_py]
             logger.info(f"Starting CipherElite for {user_id}: {' '.join(cmd)}")
 
             proc = await asyncio.create_subprocess_exec(
@@ -106,16 +156,20 @@ class CipherManager:
                 self._monitor(user_id, api_id, api_hash, session_string, prefix)
             )
 
+            # Wait and check
             await asyncio.sleep(5)
 
             if proc.returncode is not None:
-                stderr_out = await proc.stderr.read()
+                stderr_out = (await proc.stderr.read()).decode(errors="replace")
+                stdout_out = (await proc.stdout.read()).decode(errors="replace")
                 logger.error(
-                    f"CipherElite crashed for {user_id}: "
-                    f"{stderr_out.decode()[-500:]}"
+                    f"CipherElite crashed for {user_id}:\n"
+                    f"STDOUT: {stdout_out[-500:]}\n"
+                    f"STDERR: {stderr_out[-500:]}"
                 )
                 return False
 
+            logger.info(f"CipherElite running for {user_id}")
             return True
 
         except Exception as e:
@@ -139,7 +193,7 @@ class CipherManager:
     async def _monitor(self, user_id, api_id, api_hash,
                        session_string, prefix):
         retries = 0
-        max_retries = 5
+        max_retries = 3
 
         while self.monitors.get(user_id, False):
             proc = self.processes.get(user_id)
@@ -149,7 +203,9 @@ class CipherManager:
             if proc.returncode is not None:
                 retries += 1
                 if retries > max_retries:
-                    logger.error(f"Max retries for {user_id}")
+                    logger.error(
+                        f"Max retries reached for {user_id}. Giving up."
+                    )
                     self.monitors.pop(user_id, None)
                     self.db.deactivate_user(user_id)
                     break
